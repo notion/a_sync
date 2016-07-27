@@ -28,51 +28,6 @@ def to_runnable(func, *args, **kwargs):
 
 
 # [ Sync API ]
-def parallel(*runnables):
-    """
-    Return a function which will run the given args in parallel when called.
-
-    The returned function will return a list of results in the order of the runnables given.
-    Handles both awaitables and blocking functions.
-    """
-    # For parallelism we are using async, so everything gets converted to awaitables -
-    # just use the async_parallel and then block on it.
-    return helpers.to_blocking(async_parallel(*runnables))
-
-
-def serial(*runnables):
-    """
-    Return a function which will run the given runnables in series when called.
-
-    The returned function will return a list of results in the order of the runnables given.
-    Handles both awaitables and blocking functions.
-    """
-    # avoid unnecessary threads - don't convert blocking functions to awaitables,
-    # convert awaitables to blocking functions.
-    def _serial(*runnables):
-        """
-        Run the given args in series.
-
-        Return a list of results in the order of the runnables given.
-        Handles both awaitables and blocking functions.
-        """
-        return [helpers.ensure_blocking(f)() for f in runnables]
-
-    return to_runnable(_serial, *runnables)
-
-
-def foreground(func, *args, **kwargs):
-    """
-    Run a function in the foreground.
-
-    Block till the function is done, and return the results.
-    Handles both async and blocking functions.
-    """
-    runnable = to_runnable(func, *args, **kwargs)
-    blocking_func = helpers.ensure_blocking(runnable)
-    return blocking_func()
-
-
 def background(func, *args, **kwargs):
     """
     Run a runnable in the background.
@@ -162,46 +117,6 @@ def wait_for_all(*backgrounded_futures):
 
 
 # [ Async API ]
-async def async_parallel(*runnables):
-    """
-    Run the given runnables in parallel when awaited.
-
-    Returns a list of results in the order of the runnables given.
-    Handles both awaitables and blocking functions.
-    """
-    awaitables = [helpers.ensure_awaitable(f) for f in runnables]
-    return await asyncio.gather(*awaitables)
-
-
-async def async_serial(*runnables):
-    """
-    Run the given runnables in series when awaited.
-
-    Returns a list of results in the order of the runnables given.
-    Handles both awaitables and blocking functions.
-    """
-    # use the blocking serial func to avoid creating unnecessary threads for blocking
-    # runnables.  Convert it back to an awaitable because we are in an async context,
-    # where you shouldn't just run an arbitrary blocking function.
-    # Not only would that block this serial flow (intended), but it would block any
-    # other concurrent flows in the calling event loop (unintended & probably bad).
-    # This strategy produces the fewest threads (1), except when all the runnables are
-    # awaitable - then it creates an unnecessary thread.  Optimize later?
-    return await helpers.to_awaitable(serial(*runnables))
-
-
-async def async_foreground(func, *args, **kwargs):
-    """
-    Run a function in the foreground.
-
-    Awaits the function, and return the results.
-    Handles both async and blocking functions.
-    """
-    runnable = to_runnable(func, *args, **kwargs)
-    awaitable = helpers.ensure_awaitable(runnable)
-    return await awaitable
-
-
 async def async_background(func, *args, **kwargs):
     """
     Run a runnable in the background.
@@ -283,3 +198,159 @@ async def async_wait_for_all(*backgrounded_futures):
     for bf in backgrounded_futures:
         results.append(await async_wait_for(bf))
     return results
+
+
+class RunnableScheduler:
+    """Schedule function calls."""
+
+    def __init__(self):
+        """Init state."""
+        self._runnables = []
+
+    def schedule(self, runnable, *args, **kwargs):
+        """
+        Schedule a runnable to be run.
+
+        By common sense, if not by definition, if you are scheduling something to run,
+        it has not run yet.  coro objects and futures of any kind don't fit that description.
+
+        Defend against those as arguments - only accept blocking and async functions.
+        """
+        if not hasattr(runnable, '__call__'):
+            raise TypeError("{} is not callable.  Try just waiting for it instead of running it?".format(
+                runnable
+            ))
+        self._runnables.append([runnable, args, kwargs])
+        return self
+
+    def get(self):
+        """Get the list of runnables."""
+        return self._runnables
+
+
+class Parallel:
+    """
+    Parallel runner.
+
+    Challenges:
+        * running things in parallel
+        * thinking about async def vs def - you can pass either in.
+        * thinking about ^ vs coro obj vs async future vs concurrent future - accepts all.
+        * is it async vs blocking - if called from an async context, is it going to play
+          nicely (yield back & be concurrent)? (run async vs block) (new loop or current loop)
+    """
+
+    def __init__(self):
+        """Init state."""
+        self._scheduler = RunnableScheduler()
+
+    def schedule(self, runnable, *args, **kwargs):
+        """Schedule a runnable to be run."""
+        self._scheduler.schedule(runnable, *args, **kwargs)
+        return self
+
+    def _get_runnables(self):
+        """Get the scheduled runnables."""
+        return self._scheduler.get()
+
+    async def run(self):
+        """
+        Run the scheduled runnables in the thread loop.
+
+        According to https://docs.python.org/3/library/asyncio-eventloops.html#event-loop-policies-and-the-default-policy,
+        python manages a global loop per thread.  As long as nobody creates and uses secondary
+        loops in the thread, everyone should be able to depend on the global loop being the
+        one that's calling this function.
+
+        It's important then, that anyone running a new loop does so in a new thread.
+        XXX this discussion belongs somewhere else.
+        """
+        # split the runnables
+        async_runnables = [r for r in self._get_runnables() if asyncio.iscoroutinefunction(r[0])]
+        sync_runnables = [r for r in self._get_runnables() if not asyncio.iscoroutinefunction(r[0])]
+        # convert sync to async
+        async_runnables += [(to_async(r[0]), r[1], r[2]) for r in sync_runnables]
+        # create tasks
+        loop = asyncio.get_event_loop()
+        tasks = [loop.create_task(r(*args, **kwargs)) for r, args, kwargs in async_runnables]
+        gathered = asyncio.gather(*tasks)
+        # await them
+        return await asyncio.wait_for(gathered, timeout=None)
+
+    def block(self):
+        """Run the scheduled runnables in an idle loop."""
+        with helpers.idle_event_loop() as loop:
+            return loop.run_until_complete(self.run())
+
+
+class Serial:
+    """
+    Serial runner.
+
+    Challenges:
+        * running things in series
+        * thinking about async def vs def - you can pass either in.
+        * thinking about ^ vs coro obj vs async future vs concurrent future - accepts all.
+        * is it async vs blocking - if called from an async context, is it going to play
+          nicely (yield back & be concurrent)? (run async vs block) (new loop or current loop)
+    """
+
+    def __init__(self):
+        """Init state."""
+        self._scheduler = RunnableScheduler()
+
+    def schedule(self, runnable, *args, **kwargs):
+        """Schedule a runnable to be run."""
+        self._scheduler.schedule(runnable, *args, **kwargs)
+        return self
+
+    def _get_runnables(self):
+        """Get the scheduled runnables."""
+        return self._scheduler.get()
+
+    async def run(self):
+        """Run the scheduled runnables in the thread's loop."""
+        results = []
+        for r, args, kwargs in self._get_runnables():
+            if not asyncio.iscoroutinefunction(r):
+                r = to_async(r)
+            results.append(await r(*args, **kwargs))
+        return results
+
+    def block(self):
+        """Run the scheduled runnables in an idle loop."""
+        results = []
+        for r, args, kwargs in self._get_runnables():
+            if asyncio.iscoroutinefunction(r):
+                r = to_blocking(r)
+            results.append(r(*args, **kwargs))
+        return results
+
+
+def to_async(blocking):
+    """Convert a blocking function to an async function."""
+    async def wrapped_blocking(*args, **kwargs):
+        """Wrapper for a blocking function."""
+        partial = functools.partial(blocking, *args, **kwargs)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(helpers.get_or_create_executor(), partial)
+    return wrapped_blocking
+
+
+def to_blocking(async_func):
+    """Convert an async function to a blocking function."""
+    def wrapped_async(*args, **kwargs):
+        """Wrapper for an async function."""
+        with helpers.idle_event_loop() as loop:
+            return loop.run_until_complete(async_func(*args, **kwargs))
+    return wrapped_async
+
+
+async def run(runnable, *args, **kwargs):
+    """Run a function, whether async or sync."""
+    return await Serial().schedule(runnable, *args, **kwargs).run()
+
+
+def block(runnable, *args, **kwargs):
+    """Run a function, whether async or sync."""
+    return Serial().schedule(runnable, *args, **kwargs).block()
