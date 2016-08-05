@@ -5,14 +5,14 @@
 # [ -Python ]
 import asyncio
 import time
-import pprint
+# import pprint
 
 # [ -Project ]
 import a_sync
 
 
 # [ Examples ]
-if __name__ == '__main__':
+if __name__ == '__main__':  # pragma: no branch
     def hello(name, seconds):
         """Hello."""
         print('hello {}'.format(name))
@@ -45,6 +45,7 @@ if __name__ == '__main__':
 
     # a_sync.block(async_hello, 'jeff', 6)
 
+    bg = a_sync.queue_background_thread(hello, 'background-joe', 20)
     parallel_1 = a_sync.Parallel()
     parallel_1.schedule(hello, 'joe', 5)
     parallel_1.schedule(hello, 'sam', 3)
@@ -84,6 +85,7 @@ if __name__ == '__main__':
     final_parallel.schedule(serial_2.run)
 
     final_parallel.block()
+    bg.result()
     # pprint.pprint(all_results)
     # expect bob/sam/joe to start with jo/joey/joseph
     # expect jill/jane/mary to start with alex/alexandria/alexandra

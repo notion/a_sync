@@ -5,352 +5,416 @@
 # [ -Python ]
 import asyncio
 import functools
-import concurrent
+import contextlib
 # [ -Project ]
 import helpers
 
 
-# [ Design ]
-# * make the async thing easy/default
-# * make the sync thing easy/doable
+# [ Larger thoughts ]
+# A library for running functions across threads/processes/hosts
+# Make that load-balanceable
+# Make it dynamically updateable
+# all interactions only pass simple data?
 
 
-# [ General ]
-def to_runnable(func, *args, **kwargs):
-    """Convert blocking or async func to a "runnable" - either a partial or a coroutine object."""
-    # XXX return an awaitable object if one is passed in.
-    if asyncio.iscoroutinefunction(func):
-        async_func = func
-        runnable = async_func(*args, **kwargs)
+# [ API Functions ]
+@contextlib.contextmanager
+def idle_event_loop():
+    """
+    An idle event loop context manager.
+
+    Leaves the current event loop in place if it's not running.
+    Creates and sets a new event loop as the default if the current default IS running.
+    Restores the original event loop on exit.
+
+    Args:
+        None
+
+    Returns:
+        idle_event_loop_manager - a context manager which yields an idle event loop
+          for you to run async functions in.
+    """
+    original_loop = helpers.get_or_create_event_loop()
+    try:
+        if original_loop.is_running():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        else:
+            loop = original_loop
+        yield loop
+    finally:
+        asyncio.set_event_loop(original_loop)
+
+
+def to_async(blocking_func):
+    """
+    Convert a blocking function to an async function.
+
+    Args:
+        blocking_func - a blocking function
+
+    Returns:
+        async_func - an awaitable function
+
+    If the argument is already a coroutine function, it is returned unchanged.
+
+    If the argument is a partial which wraps a coroutine function, it is returned
+    unchanged.
+
+    The blocking function is made into an awaitable by wrapping its call inside
+    an awaitable function.
+
+    On the assumption that a blocking function is long-running, and that an
+    async caller wants to run other things concurrently, the blocking function
+    is called from the running loop's thread/process executor, which means
+    it runs in a thread.  This allows concurrent running, but introduces possible
+    thread-safety issues, which the caller should be aware of.
+
+    XXX - what if the loop isn't running?  We could be in someone else's loop
+    space, like the curio kernel.  The 'run_in_executor' function returns a
+    coroutine, so it shouldn't matter.
+
+    XXX - possible new function - 'to_concurrent', which does the thread. Update
+    this to 'to_awaitable', which just wraps in an awaitable.
+
+    XXX - or, 'to_awaitable' for awaitable wrapping, 'to_concurrent' for thread,
+    and 'to_parallel' for multiprocess?  Too much?  Wait for a need?  Want to not
+    break code if we add these later, so the current version should probably be
+    renamed to 'to_concurrent'.
+
+    Required tests:
+        * convert blocking to async
+        * keep async as same
+        * run something concurrently with a long-running blocking function
+        * convert a blocking partial
+        * keep an async partial the same
+        * validate that it doesn't matter if the loop is running.
+    """
+    if asyncio.iscoroutinefunction(getattr(blocking_func, 'func', blocking_func)):
+        # caller messed up - this is already async
+        async_func = blocking_func
     else:
-        runnable = functools.partial(func, *args, **kwargs)
-    return runnable
+        async def async_func(*args, **kwargs):
+            """Wrapper for a blocking function."""
+            partial = functools.partial(blocking_func, *args, **kwargs)
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(helpers.get_or_create_executor(), partial)
+    return async_func
 
 
-# [ Sync API ]
-def background(func, *args, **kwargs):
+def to_blocking(async_func):
     """
-    Run a runnable in the background.
+    Convert an async function to a blocking function.
 
-    Returns a backgrounded_future object which you
-    can use to get the results, wait, etc.
-    Handles both async and blocking functions.
+    Args:
+        async_func - an async function
+
+    Returns:
+        blocking_func - a blocking function
+
+    If the argument is already a blocking function, it is returned unchanged.
+
+    If the argument is a partial for an awaitable, it is converted.
+
+    The awaitable function is made blocking by wrapping its call in a blocking
+    function, which gets/creates an idle asyncio event loop and runs the
+    awaitable in it until it is complete.
+
+    XXX - probably a lighter-weight way to do this - like handling the coroutine
+    directly.
+
+    Required tests:
+        * convert async to blocking
+        * keep blocking the same
+        * keep blocking partial the same
+        * convert async partial
     """
-    runnable = to_runnable(func, *args, **kwargs)
-    blocking = helpers.ensure_blocking(runnable)
-    # must run in an idle event loop.  if you attach it to
-    # a running loop, you don't know when that loop will stop,
-    # and therefore you don't know if this function will ever be
-    # called, or ever complete.
-    # XXX is that true?  the function is executed immediately in the executor,
-    # and if the loop is idle, it gets kicked in the 'wait' functions...
-    with helpers.idle_event_loop() as loop:
-        # XXX need unique executor for every thread?  every time it fills up?  need to think
-        # about how the tasks get queued up.
-        future = loop.run_in_executor(helpers.get_or_create_executor(), blocking)
-        backgrounded_future = {
-            'future': future,
-            'loop': loop,
-            'func': func,
-            'args': args,
-            'kwargs': kwargs,
-        }
-        return backgrounded_future
+    if not asyncio.iscoroutinefunction(getattr(async_func, 'func', async_func)):
+        # caller messed up - this is already blocking
+        blocking = async_func
+    else:
+        def blocking(*args, **kwargs):
+            """Wrapper for an async function."""
+            with idle_event_loop() as loop:
+                return loop.run_until_complete(async_func(*args, **kwargs))
+    return blocking
 
 
-def wait_for(backgrounded_future):
-    """Wait for the future to error or complete."""
-    loop = backgrounded_future['loop']
-    future = backgrounded_future['future']
-    while not future.done():
-        # if the loop isn't running, you need to kick it to
-        # make it check/set the future data correctly.
-        if not loop.is_running():
-            loop.run_until_complete(asyncio.sleep(0))
-    return future.result()
+# No async background task here because that depends on knowing the environment
+# of the caller, as far as async context goes, and you can't.  For example,
+# if the caller is being executed via the curio kernel, and we add a task to the
+# current asyncio event loop, that task will never complete.
 
 
-def wait_for_any(*backgrounded_futures):
+def queue_background_thread(func, *args, **kwargs):
     """
-    Wait for any of the futures to error or complete.
+    Queue the function to be run in a thread, but don't wait for it.
 
-    Returns: completed_backgrounded_future, incomplete_backgrounded_futures
+    Args:
+        func - the function to run
+        args - the args to call the function with
+        kwargs - the kwargs to call the function with
+
+    Returns:
+        future - a concurrent.futures Future for the function.
+
+    If the thread pool executor is processing on all threads, it will queue this
+    task.  There's currently no way to check it or expand it's pool, hence the
+    name of the function and the summary have been updated to reflect that..
+
+    XXX - add a mechanism to expand threads if there's compute power available
+    on the process.
+
+    XXX - add a function which errors if its function is queued.
+
+    XXX - add a function to let the caller check if their function will be queued.
+
+    Required tests:
+        * queue a task
+        * queue enough tasks to fill the queue & more.
     """
-    while True:
-        for backgrounded_future in backgrounded_futures:
-            loop = backgrounded_future['loop']
-            future = backgrounded_future['future']
-            # if the loop isn't running, you need to kick it to
-            # make it check/set the future data correctly.
-            if not loop.is_running():
-                # XXX protect against thread race condition here, by ignoring the
-                # loop already running error.  NEEDS TEST.
-                loop.run_until_complete(asyncio.sleep(0))
-            if future.done():
-                backgrounded_futures = list(backgrounded_futures)
-                backgrounded_futures.remove(backgrounded_future)
-                return backgrounded_future, backgrounded_futures
+    return helpers.get_or_create_executor().submit(to_blocking(func), *args, **kwargs)
 
 
-def as_completed(*backgrounded_futures):
-    """Yield the backgrounded futures as they are completed."""
-    futures_left = backgrounded_futures
-    while futures_left:
-        completed, futures_left = wait_for_any(*futures_left)
-        yield completed
-
-
-def wait_for_all(*backgrounded_futures):
+async def run(func, *args, **kwargs):
     """
-    Wait for the futures to error or complete.
+    Run a function in an async manner, whether the function is async or blocking.
 
-    If you only want to run things in parallel, don't use
-    background and wait for all - use the parallel function, as it
-    takes better advantage of async/await in a single thread.
+    Args:
+        func - the function (async or blocking) to run
+        args - the args to run the function with
+        kwargs - the kwargs to run the function with
 
-    Will wait for all backgrounded futures to return, and will
-    return a list of results in the order of the passed in args.
+    Returns:
+        coro - a coroutine object to await
 
-    The first error encountered will be raised.
+    Coro Returns:
+        result - whatever the function returns when it's done.
+
+    Required tests:
+        * run an async func
+        * run a blocking func
     """
-    return [wait_for(bf) for bf in backgrounded_futures]
+    return await to_async(func)(*args, **kwargs)
 
 
-# [ Async API ]
-async def async_background(func, *args, **kwargs):
+def block(runnable, *args, **kwargs):
     """
-    Run a runnable in the background.
+    Run a function in a blocking manner, whether the function is async or blocking.
 
-    Returns
+    Args:
+        func - the function (async or blocking) to run
+        args - the args to run the function with
+        kwargs - the kwargs to run the function with
 
-    Schedules the runnable on the current event loop.
-    Handles both async and blocking functions.
+    Returns:
+        result - whatever the function returns when it's done.
+
+    Required tests:
+        * run an async func
+        * run a blocking func
     """
-    runnable = to_runnable(func, *args, **kwargs)
-    awaitable = helpers.ensure_awaitable(runnable)
-    future = asyncio.ensure_future(awaitable)
-    backgrounded_future = {
-        'future': future,
-        'func': func,
-        'args': args,
-        'kwargs': kwargs,
-    }
-    return backgrounded_future
+    return to_blocking(runnable)(*args, **kwargs)
 
 
-async def async_wait_for(backgrounded_future):
-    """
-    Wait for the future to error or complete.
-
-    It's important to only wait for futures which were backgrounded in this loop,
-    in this thread.  If you want to pass the futures around between loops and threads,
-    use the sync version of this function.
-
-    If you want this wait to actually succeed, the caller needs to make sure the loop runs
-    at least until the wait_for is done.
-    """
-    future = backgrounded_future['future']
-    return await asyncio.wait_for(future, timeout=None)
-
-
-async def async_wait_for_any(*backgrounded_futures):
-    """
-    Wait for any of the futures to error or complete.
-
-    Returns: completed_backgrounded_future, incomplete_backgrounded_futures
-    """
-    done, pending = await asyncio.wait([bf['future'] for bf in backgrounded_futures], return_when=concurrent.futures.FIRST_COMPLETED)
-    first_done = done[0]
-    for bf in backgrounded_futures:
-        if bf['future'] == first_done:
-            backgrounded_futures = list(backgrounded_futures)
-            backgrounded_futures.remove(bf)
-            return bf, backgrounded_futures
-
-
-async def async_as_completed(*backgrounded_futures):
-    """Yield the backgrounded futures as they are completed."""
-    raise NotImplementedError
-    # XXX not sure how to implement this - yield inside an async function
-    # is an error - I want to return a generator that gets the next
-    # thing as completed asynchronously...
-    # futures_left = backgrounded_futures
-    # while futures_left:
-    #     completed, futures_left = await async_wait_for_any(*futures_left)
-    #     yield completed
-    # maybe with an async iterable
-
-
-async def async_wait_for_all(*backgrounded_futures):
-    """
-    Wait for the futures to error or complete.
-
-    If you only want to run things in parallel, don't use
-    background and wait for all - use the parallel function, as it
-    takes better advantage of async/await in a single thread.
-
-    Will wait for all backgrounded futures to return, and will
-    return a list of results in the order of the passed in args.
-
-    The first error encountered will be raised.
-    """
-    results = []
-    for bf in backgrounded_futures:
-        results.append(await async_wait_for(bf))
-    return results
-
-
-class RunnableScheduler:
-    """Schedule function calls."""
-
-    def __init__(self):
-        """Init state."""
-        self._runnables = []
-
-    def schedule(self, runnable, *args, **kwargs):
-        """
-        Schedule a runnable to be run.
-
-        By common sense, if not by definition, if you are scheduling something to run,
-        it has not run yet.  coro objects and futures of any kind don't fit that description.
-
-        Defend against those as arguments - only accept blocking and async functions.
-        """
-        if not hasattr(runnable, '__call__'):
-            raise TypeError("{} is not callable.  Try just waiting for it instead of running it?".format(
-                runnable
-            ))
-        self._runnables.append([runnable, args, kwargs])
-        return self
-
-    def get(self):
-        """Get the list of runnables."""
-        return self._runnables
-
-
+# [ Classes ]
 class Parallel:
     """
     Parallel runner.
 
-    Challenges:
-        * running things in parallel
-        * thinking about async def vs def - you can pass either in.
-        * thinking about ^ vs coro obj vs async future vs concurrent future - accepts all.
-        * is it async vs blocking - if called from an async context, is it going to play
-          nicely (yield back & be concurrent)? (run async vs block) (new loop or current loop)
+    Provides a way to:
+        * schedule a heterogeneous mix of blocking and awaitable functions
+        * run those functions all in parallel
+        * to run them in either a blocking or an asynchronous manner
+        * to receive the results in the order in which the functions were passed in.
+        * to run them as many times as desired (similarly to a partial function)
+
+    It's analogous to a partial function, but instead of supplying args for a function and getting
+    a function back, you supply args for as many functions as you like, and get an function back with which
+    you can run those functions and arguments in parallel, either synchronously or asynchronously.
     """
 
     def __init__(self):
-        """Init state."""
-        self._scheduler = RunnableScheduler()
+        """
+        Init state.
 
-    def schedule(self, runnable, *args, **kwargs):
-        """Schedule a runnable to be run."""
-        self._scheduler.schedule(runnable, *args, **kwargs)
+        Sets up an initial (empty) set of functions to run.
+
+        Args:
+            None
+
+        Returns:
+            Technically, none.
+
+        Required tests:
+            None
+        """
+        self._funcs = []
+
+    def schedule(self, func, *args, **kwargs):
+        """
+        Schedule a function to be run.
+
+        Args:
+            func - the function to schedule
+            *args - the args to call the function with
+            **kwargs - the kwargs to call the function with
+
+        Returns:
+            parallel - the parallel object, to allow chaining.
+
+        Required tests:
+            * validate the return
+        """
+        self._funcs.append(functools.partial(func, *args, **kwargs))
         return self
-
-    def _get_runnables(self):
-        """Get the scheduled runnables."""
-        return self._scheduler.get()
 
     async def run(self):
         """
-        Run the scheduled runnables in the thread loop.
+        Run the scheduled functions in parallel, asynchronously.
 
-        According to https://docs.python.org/3/library/asyncio-eventloops.html#event-loop-policies-and-the-default-policy,
-        python manages a global loop per thread.  As long as nobody creates and uses secondary
-        loops in the thread, everyone should be able to depend on the global loop being the
-        one that's calling this function.
+        Args:
+            None
 
-        It's important then, that anyone running a new loop does so in a new thread.
-        XXX this discussion belongs somewhere else.
+        Returns:
+            list - a list of the results from the scheduled functions, in the
+              order they were scheduled in.
+
+        Note that while this function is awaitable, the scheduled functions are
+        run in an asyncio loop in a separate thread.  We cannot create asyncio
+        tasks and run them in the current thread because that depends on knowing the environment
+        of the caller, as far as async context goes, and you can't.  For example,
+        if the caller is being executed via the curio kernel, and we add a task to the
+        current asyncio event loop, that task will never complete.
+
+        Our only alternative is to run in an independent loop that we control.  The
+        only way to actually make that concurrent instead of blocking in this function
+        is to run that loop in its own thread.
+
+        XXX - rename function to better reflect that it runs in a thread?
+        XXX - think about the thread queueing that to_async performs right now...
+          if other functions are created to do threading/multi-proc/throwing errors,
+          we want to use the right one here.
+
+        Required tests:
+            * run all async in parallel
+            * run all blocking in parallel
+            * run a mix
+            * run things in parallel when the thread pool is already full
         """
-        # split the runnables
-        async_runnables = [r for r in self._get_runnables() if asyncio.iscoroutinefunction(r[0])]
-        sync_runnables = [r for r in self._get_runnables() if not asyncio.iscoroutinefunction(r[0])]
-        # convert sync to async
-        async_runnables += [(to_async(r[0]), r[1], r[2]) for r in sync_runnables]
-        # create tasks
-        loop = asyncio.get_event_loop()
-        tasks = [loop.create_task(r(*args, **kwargs)) for r, args, kwargs in async_runnables]
-        gathered = asyncio.gather(*tasks)
-        # await them
-        return await asyncio.wait_for(gathered, timeout=None)
+        return await to_async(self.block)()
 
     def block(self):
-        """Run the scheduled runnables in an idle loop."""
-        with helpers.idle_event_loop() as loop:
-            return loop.run_until_complete(self.run())
+        """
+        Run the scheduled functions in parallel, blocking.
+
+        Args:
+            None
+
+        Returns:
+            list - a list of the results from the scheduled functions, in the
+              order they were scheduled in.
+
+        Required tests:
+            * run all async in parallel
+            * run all blocking in parallel
+            * run a mix
+        """
+        with idle_event_loop() as loop:
+            tasks = [loop.create_task(to_async(f)()) for f in self._funcs]
+            gathered = asyncio.gather(*tasks)
+            return loop.run_until_complete(gathered)
 
 
 class Serial:
     """
     Serial runner.
 
-    Challenges:
-        * running things in series
-        * thinking about async def vs def - you can pass either in.
-        * thinking about ^ vs coro obj vs async future vs concurrent future - accepts all.
-        * is it async vs blocking - if called from an async context, is it going to play
-          nicely (yield back & be concurrent)? (run async vs block) (new loop or current loop)
+    Provides a way to:
+        * schedule a heterogeneous mix of blocking and awaitable functions
+        * run those functions all in series
+        * to run them in either a blocking or an asynchronous manner
+        * to receive the results in the order in which the functions were passed in.
+        * to run them as many times as desired (similarly to a partial function)
+
+    It's analogous to a partial function, but instead of supplying args for a function and getting
+    a function back, you supply args for as many functions as you like, and get an function back with which
+    you can run those functions and arguments in series, either synchronously or asynchronously.
     """
 
     def __init__(self):
-        """Init state."""
-        self._scheduler = RunnableScheduler()
+        """
+        Init state.
 
-    def schedule(self, runnable, *args, **kwargs):
-        """Schedule a runnable to be run."""
-        self._scheduler.schedule(runnable, *args, **kwargs)
+        Sets up an initial (empty) set of functions to run.
+
+        Args:
+            None
+
+        Returns:
+            Technically, none.
+
+        Required tests:
+            None
+        """
+        self._funcs = []
+
+    def schedule(self, func, *args, **kwargs):
+        """
+        Schedule a function to be run.
+
+        Args:
+            func - the function to schedule
+            *args - the args to call the function with
+            **kwargs - the kwargs to call the function with
+
+        Returns:
+            series - the series object, to allow chaining.
+
+        Required tests:
+            * validate the return
+        """
+        self._funcs.append(functools.partial(func, *args, **kwargs))
         return self
 
-    def _get_runnables(self):
-        """Get the scheduled runnables."""
-        return self._scheduler.get()
-
     async def run(self):
-        """Run the scheduled runnables in the thread's loop."""
+        """
+        Run the scheduled functions in series, asynchronously.
+
+        Args:
+            None
+
+        Returns:
+            list - a list of the results from the scheduled functions, in the
+              order they were scheduled in.
+
+        Required tests:
+            * run all async in series
+            * run all blocking in series
+            * run a mix
+        """
         results = []
-        for r, args, kwargs in self._get_runnables():
-            if not asyncio.iscoroutinefunction(r):
-                r = to_async(r)
-            results.append(await r(*args, **kwargs))
+        for func in self._funcs:
+            results.append(await run(func))
         return results
 
     def block(self):
-        """Run the scheduled runnables in an idle loop."""
+        """
+        Run the scheduled functions in series, blocking.
+
+        Args:
+            None
+
+        Returns:
+            list - a list of the results from the scheduled functions, in the
+              order they were scheduled in.
+
+        Required tests:
+            * run all async in series
+            * run all blocking in series
+            * run a mix
+        """
         results = []
-        for r, args, kwargs in self._get_runnables():
-            if asyncio.iscoroutinefunction(r):
-                r = to_blocking(r)
-            results.append(r(*args, **kwargs))
+        for func in self._funcs:
+            results.append(block(func))
         return results
-
-
-def to_async(blocking):
-    """Convert a blocking function to an async function."""
-    async def wrapped_blocking(*args, **kwargs):
-        """Wrapper for a blocking function."""
-        partial = functools.partial(blocking, *args, **kwargs)
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(helpers.get_or_create_executor(), partial)
-    return wrapped_blocking
-
-
-def to_blocking(async_func):
-    """Convert an async function to a blocking function."""
-    def wrapped_async(*args, **kwargs):
-        """Wrapper for an async function."""
-        with helpers.idle_event_loop() as loop:
-            return loop.run_until_complete(async_func(*args, **kwargs))
-    return wrapped_async
-
-
-async def run(runnable, *args, **kwargs):
-    """Run a function, whether async or sync."""
-    return await Serial().schedule(runnable, *args, **kwargs).run()
-
-
-def block(runnable, *args, **kwargs):
-    """Run a function, whether async or sync."""
-    return Serial().schedule(runnable, *args, **kwargs).block()
