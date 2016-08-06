@@ -101,7 +101,7 @@ def to_async(blocking_func: AnyCallable) -> AnyCallable:
             loop = asyncio.get_event_loop()
             # lambda is to get around AbstractEventLoop typing not accepting partials
             # remove lambda when https://github.com/python/mypy/issues/1484 is resolved
-            return await loop.run_in_executor(helpers.get_or_create_executor(), lambda: partial)
+            return await loop.run_in_executor(helpers.get_or_create_executor(), lambda: partial())
     return async_func
 
 
