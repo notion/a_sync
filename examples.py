@@ -13,14 +13,14 @@ import a_sync
 
 # [ Examples ]
 if __name__ == '__main__':  # pragma: no branch
-    def hello(name, seconds):
+    def hello(name: str, seconds: int) -> str:
         """Hello."""
         print('hello {}'.format(name))
         time.sleep(seconds)
         print('bye {}'.format(name))
         return name
 
-    async def async_hello(name, seconds):
+    async def async_hello(name: str, seconds: int) -> str:
         """Hello."""
         print('hello {}'.format(name))
         await asyncio.sleep(seconds)
