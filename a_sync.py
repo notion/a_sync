@@ -6,20 +6,20 @@
 import asyncio
 import functools
 import contextlib
+from typing import Generator, Callable, Any, List, Union
+from concurrent import futures
 # [ -Project ]
 import helpers
 
 
-# [ Larger thoughts ]
-# A library for running functions across threads/processes/hosts
-# Make that load-balanceable
-# Make it dynamically updateable
-# all interactions only pass simple data?
+# [ Types ]
+# convert AnyCallable to just Callable when https://github.com/python/mypy/issues/1484 is resolved
+AnyCallable = Union[Callable, functools.partial]
 
 
 # [ API Functions ]
 @contextlib.contextmanager
-def idle_event_loop():
+def idle_event_loop() -> Generator:
     """
     An idle event loop context manager.
 
@@ -46,7 +46,7 @@ def idle_event_loop():
         asyncio.set_event_loop(original_loop)
 
 
-def to_async(blocking_func):
+def to_async(blocking_func: AnyCallable) -> AnyCallable:
     """
     Convert a blocking function to an async function.
 
@@ -94,15 +94,18 @@ def to_async(blocking_func):
         # caller messed up - this is already async
         async_func = blocking_func
     else:
-        async def async_func(*args, **kwargs):
+        async def async_func(*args, **kwargs) -> Any:
             """Wrapper for a blocking function."""
-            partial = functools.partial(blocking_func, *args, **kwargs)
+            # remove ignore comment when https://github.com/python/mypy/issues/1484 is resolved
+            partial = functools.partial(blocking_func, *args, **kwargs)  # type: ignore
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(helpers.get_or_create_executor(), partial)
+            # lambda is to get around AbstractEventLoop typing not accepting partials
+            # remove lambda when https://github.com/python/mypy/issues/1484 is resolved
+            return await loop.run_in_executor(helpers.get_or_create_executor(), lambda: partial)
     return async_func
 
 
-def to_blocking(async_func):
+def to_blocking(async_func: AnyCallable) -> AnyCallable:
     """
     Convert an async function to a blocking function.
 
@@ -133,7 +136,7 @@ def to_blocking(async_func):
         # caller messed up - this is already blocking
         blocking = async_func
     else:
-        def blocking(*args, **kwargs):
+        def blocking(*args, **kwargs) -> Any:
             """Wrapper for an async function."""
             with idle_event_loop() as loop:
                 return loop.run_until_complete(async_func(*args, **kwargs))
@@ -146,7 +149,7 @@ def to_blocking(async_func):
 # current asyncio event loop, that task will never complete.
 
 
-def queue_background_thread(func, *args, **kwargs):
+def queue_background_thread(func: Callable, *args, **kwargs) -> futures.Future:
     """
     Queue the function to be run in a thread, but don't wait for it.
 
@@ -176,7 +179,7 @@ def queue_background_thread(func, *args, **kwargs):
     return helpers.get_or_create_executor().submit(to_blocking(func), *args, **kwargs)
 
 
-async def run(func, *args, **kwargs):
+async def run(func: AnyCallable, *args, **kwargs) -> Any:
     """
     Run a function in an async manner, whether the function is async or blocking.
 
@@ -198,7 +201,7 @@ async def run(func, *args, **kwargs):
     return await to_async(func)(*args, **kwargs)
 
 
-def block(runnable, *args, **kwargs):
+def block(func: AnyCallable, *args, **kwargs) -> Any:
     """
     Run a function in a blocking manner, whether the function is async or blocking.
 
@@ -214,7 +217,7 @@ def block(runnable, *args, **kwargs):
         * run an async func
         * run a blocking func
     """
-    return to_blocking(runnable)(*args, **kwargs)
+    return to_blocking(func)(*args, **kwargs)
 
 
 # [ Classes ]
@@ -234,7 +237,7 @@ class Parallel:
     you can run those functions and arguments in parallel, either synchronously or asynchronously.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Init state.
 
@@ -249,9 +252,9 @@ class Parallel:
         Required tests:
             None
         """
-        self._funcs = []
+        self._funcs = []  # type: List[functools.partial]
 
-    def schedule(self, func, *args, **kwargs):
+    def schedule(self, func, *args, **kwargs) -> 'Parallel':
         """
         Schedule a function to be run.
 
@@ -269,7 +272,7 @@ class Parallel:
         self._funcs.append(functools.partial(func, *args, **kwargs))
         return self
 
-    async def run(self):
+    async def run(self) -> List[Any]:
         """
         Run the scheduled functions in parallel, asynchronously.
 
@@ -304,7 +307,7 @@ class Parallel:
         """
         return await to_async(self.block)()
 
-    def block(self):
+    def block(self) -> List[Any]:
         """
         Run the scheduled functions in parallel, blocking.
 
@@ -322,7 +325,8 @@ class Parallel:
         """
         with idle_event_loop() as loop:
             tasks = [loop.create_task(to_async(f)()) for f in self._funcs]
-            gathered = asyncio.gather(*tasks)
+            # remove ignore comment when https://github.com/python/typeshed/issues/453 is resolved.
+            gathered = asyncio.gather(*tasks)  # type: ignore
             return loop.run_until_complete(gathered)
 
 
@@ -342,7 +346,7 @@ class Serial:
     you can run those functions and arguments in series, either synchronously or asynchronously.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Init state.
 
@@ -357,9 +361,9 @@ class Serial:
         Required tests:
             None
         """
-        self._funcs = []
+        self._funcs = []  # type: List[functools.partial]
 
-    def schedule(self, func, *args, **kwargs):
+    def schedule(self, func: Callable, *args, **kwargs) -> 'Serial':
         """
         Schedule a function to be run.
 
@@ -377,7 +381,7 @@ class Serial:
         self._funcs.append(functools.partial(func, *args, **kwargs))
         return self
 
-    async def run(self):
+    async def run(self) -> List[Any]:
         """
         Run the scheduled functions in series, asynchronously.
 
@@ -398,7 +402,7 @@ class Serial:
             results.append(await run(func))
         return results
 
-    def block(self):
+    def block(self) -> List[Any]:
         """
         Run the scheduled functions in series, blocking.
 
