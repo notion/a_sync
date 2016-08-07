@@ -5,8 +5,6 @@
 # [ -Python ]
 import asyncio
 import time
-# import pprint
-
 # [ -Project ]
 import a_sync
 
@@ -14,38 +12,46 @@ import a_sync
 # [ Examples ]
 if __name__ == '__main__':  # pragma: no branch
     def hello(name: str, seconds: int) -> str:
-        """Hello."""
+        """
+        Hello.
+
+        Prints 'hello <name>', waits for <seconds> seconds, and then
+        prints 'bye <name>' and returns the name.
+
+        Args:
+            name - the name to say hello to.
+            seconds - the seconds to wait to say bye.
+
+        Returns:
+            name - the given name.
+        """
         print('hello {}'.format(name))
         time.sleep(seconds)
         print('bye {}'.format(name))
         return name
 
     async def async_hello(name: str, seconds: int) -> str:
-        """Hello."""
+        """
+        Hello.
+
+        Prints 'hello <name>', waits for <seconds> seconds, and then
+        prints 'bye <name>' and returns the name.
+
+        Args:
+            name - the name to say hello to.
+            seconds - the seconds to wait to say bye.
+
+        Returns:
+            name - the given name.
+        """
         print('hello {}'.format(name))
         await asyncio.sleep(seconds)
         print('bye {}'.format(name))
         return name
 
-    # parallel_1 = a_sync.Parallel()
-    # parallel_1.schedule(hello, 'joe', 5)
-    # parallel_1.schedule(hello, 'sam', 3)
-    # parallel_1.schedule(async_hello, 'bob', 1)
-    # asyncio.get_event_loop().run_until_complete(parallel_1.run())
-
-    # parallel_1.block()
-
-    # serial_1 = a_sync.Serial()
-    # serial_1.schedule(hello, 'joe', 5)
-    # serial_1.schedule(hello, 'sam', 3)
-    # serial_1.schedule(async_hello, 'bob', 1)
-    # asyncio.get_event_loop().run_until_complete(serial_1.run())
-
-    # serial_1.block()
-
-    # a_sync.block(async_hello, 'jeff', 6)
-
     bg = a_sync.queue_background_thread(hello, 'background-joe', 20)
+    # expect background-joe immediately
+
     parallel_1 = a_sync.Parallel()
     parallel_1.schedule(hello, 'joe', 5)
     parallel_1.schedule(hello, 'sam', 3)
@@ -86,7 +92,6 @@ if __name__ == '__main__':  # pragma: no branch
 
     final_parallel.block()
     bg.result()
-    # pprint.pprint(all_results)
     # expect bob/sam/joe to start with jo/joey/joseph
     # expect jill/jane/mary to start with alex/alexandria/alexandra
     # total expected ordering:
@@ -98,3 +103,4 @@ if __name__ == '__main__':  # pragma: no branch
     # stop mary/alexandra
     # stop alexandria/jane
     # stop alex/jill
+    # stop background-joe
