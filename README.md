@@ -1,6 +1,25 @@
 # a_sync
 An async helper library for Python's async functionality.
 
+# Reason for existing
+This library exists because async/await syntax introduces a tension between blocking and asynchronous contexts, and
+blocking and asynchronous functions, and most of the documentation and tutorials out there only discuss the very
+simplest uses of async in Python.
+
+When it comes to actually using the async features and the asyncio library in a real project, you don't want to have to
+constantly worry about what thread you're running in, what loop is global and whether or not it's running.  You don't
+want to and shouldn't have to worry about whether asyncio or some other async library (like curio) is running in a higher
+or lower level than your current abstraction layer in order to use asyncio and await syntax correctly.
+
+This library provides simple functions for:
+* running an async function from a blocking context
+* running a blocking function from an async context
+* running a blocking function in the background
+* running multiple functions in parallel, either asynchronously or in a blocking fashion
+* running multiple functions in series, either asynchronously or in a blocking fashion
+* getting/creating and setting/reverting an independent asyncio event loop to use, regardless of thread or thread-global
+asyncio loop run status.
+
 # Under construction
 The repo is "under construction" - it serves at the moment as a place to put the project and "get it out there", but there are a lot of project-management tasks to do, including getting a sensible README up.
 
@@ -225,6 +244,30 @@ for reasons of symmetry and some convenience, a `Serial` class is provided, whic
 The drawback to using this method is that you have to wait for the results, and you cannot pass them around.  The benefits are:
 * you can ignore function type (sync/async)
 * you can run blocking or async
+
+## Getting an asyncio loop to operate on
+If you want to use an asyncio loop directly, most tutorials say to do `loop = asyncio.get_event_loop()`.  This has
+similar problems as discussed before:
+* it assumes you are in the main thread
+* it requires you to actually check whether the loop is running before you use it, and use it differently based
+on the result - unnaturally coupling your code to external conditions.
+* it opens up the possibility of polluting your caller's state (for instance if you add tasks to the event loop
+which the caller was not expecting, because your use of an event loop is a detail abstracted away from the caller)
+
+`a_sync` provides the `idle_event_loop` function for this case.  If you want an event loop to use, which behaves to you
+and the code you call as if you did `asyncio.get_event_loop()`, but which is safe from the listed problems, do:
+
+```python
+with a_sync.idle_event_loop() as loop:
+    # use loop
+```
+
+You can use this loop, confident that:
+* it exists
+* it's not yet running
+* asyncio functions you call will use this loop (unless you pass another loop in, or another loop is retrieved from 
+some object state)
+* when the context manager is left, the original global thread loop will be restored, so calling code will not be affected.
 
 # API
 
