@@ -65,6 +65,166 @@ Further musings given the stretch goals - this assumes you want python for other
 other languages which are explicitly designed for concurrency from the start, and usually features designed into the
 lanugage are easier to work with than libraries built on top are.
 
+# Examples
+## Running one function
+### Async in async
+If you're running the async version in an async context, you do so like:
+
+`await async_hello('foo', 5)`
+
+This behaves as a blocking function locally (it will wait 5s before executing the next line), but it allows
+other async functions to run concurrently while the sleep is occurring.  You don't need this library for this use case.
+
+### blocking in blocking
+If you're running the blocking version in a blocking context, you do so like:
+
+`hello('foo', 5)`
+
+This blocks the current thread until the function is done and then moves on.  You don't need this library for this use
+case.
+
+### async in blocking
+If you're running the async version in a blocking context, you have several options:
+
+#### the error way
+
+`await async_hello('foo', 5)`
+
+This will raise an error, because you're not in an async context.
+
+#### the wrong way
+`async_hello('foo', 5)`
+
+This will return a coroutine object, rather than the expected return value (the name), and will not actually run
+the function.  Functions defined with `async def` are "coroutine functions", and their actual return value is an
+awaitable coroutine.  Running this coroutine to completion is what actually returns your expected value.
+
+You could figure out how to run the co-routine manually, but the asyncio library provides a way to do this which is
+simpler:
+
+#### the official way
+`asyncio.get_event_loop().run_until_complete(async_hello('foo', 5))`
+
+This will get the current thread's global asyncio event loop, and run your function in it, block until that function
+is done, and then return the value to you.
+
+This is what most tutorials for asyncio show you, and this is where they generally stop.  There are, however, some
+problems with this method:
+
+* it assumes you're in the main thread, or in a thread which has an event loop set.  New threads do not by default
+have an event loop set on them.  If you use this code in a blocking function that gets called from a non-main thread,
+it will raise an exception about not having an event loop.
+* it assumes you're not already in the main event loop.  It's reasonable to assume that at some point, someone is going
+to want to run an async function in a blocking fashion, and run_until_complete makes that possible.  This means it's
+possible to create a function which calls this code.  It's also possible to then call that function from within a
+running event loop.  You probably don't want to structure your code that way from the start, but hey, re-structuring
+happens, libraries get written and used in new and interesting places, so it's important to think about the consequences
+of this case.  If you run `run_until_complete` on the default loop inside the default loop, you're going to get a runtime
+error telling you the loop is already running.
+
+This is one of the original reasons this library was written.  It provides you with:
+
+#### the a_sync option
+`a_sync.block(async_hello, 'foo', 5)`
+
+This takes your async function and the args and returns the same output as if you'd done `await` in an async context.
+
+If you just want to get a blocking function back (and not call it immediately), you can use
+`blocking_hello = a_sync.to_blocking(async_hello)`.  You can then call it later like `blocking_hello('foo', 5)`.
+
+### Sync in async
+
+Generally, if you want to run something asynchronously in an async context, you should use `async def` instead of `def`,
+but what if you can't, because it's a third party function, or for other reasons?
+
+#### Block the thread
+
+Just running `hello('foo', 5)` will cause the code to run, but will block your thread - nothing else in the thread will
+run until it returns.  
+
+#### the official way
+
+`await asyncio.get_event_loop().run_in_executor(None, hello, 'foo', 5)`
+
+This is both awkward syntax, and suffers from similar problems as before: it assumes main thread, and it assumes the
+the event loop IS running (but maybe you're using a different event loop - you can do that - someone ELSE could do that
+with your code, and it may not be obvious that there are event loops in use in lower levels of code).
+
+This is another of the original reasons for writting this library, which provides you with:
+
+#### the a_sync way
+
+`await a_sync.run(hello, 'foo', 5)`
+
+This takes a blocking function and its args and returns the same value, but does not block the current thread as it runs.
+
+It also:
+* is syntactically simpler
+* will automatically use a new event loop if the current thread-global event loop is missing
+* will automatically use a new event loop if the current thread-global event loop is already running
+
+One unfortunate thing to be aware of here is that the implementation acheives asynchronisity via the same basic mechanism
+as the official way - it runs the blocking code in a subthread.  If the underlying threadpool is full, this function will
+not block, but it will also not execute until the threadpool has room.  This is not any worse than the official method,
+but it is something to be aware of if you run in to problems with function execution piling up.
+
+If you just want an async function to use later, you can use `awaitable_hello = a_sync.to_async(hello)`, and then
+later await it as normal: `await awaitable_hello('foo', 5)`.
+
+## Running a single task in the background
+
+If you want to run something in the background, you again have several options, and they all have similar downsides as
+the examples above.  `a_sync` provides `queue_background_thread`:
+
+```python
+future = queue_background_thread(hello, 'foo', 5)
+# do other things
+# the 'hello' function is running in the background
+result = future.result()  # waits for background task to complete.
+```
+
+This function is really just a light wrapper around some of the functions from concurrent.futures.  If you're running
+from a blocking context, this is the best you can do - the async/await stuff doesn't help here - that's for running
+concurrently within the same thread.
+
+If you're running from the async context, it's best to use the available tools and functions in the asyncio or curio
+libraries (such as creating and waiting for tasks).
+
+## Running multiple tasks in the background
+
+If you want to run multiple tasks in the background, you can call `queue_background_thread` multiple times, and manage
+the futures yourself.  There's also a convenience class provided by a_sync for that purpose: `Parallel`.
+
+```python
+parallel_1 = a_sync.Parallel()
+parallel_1.schedule(hello, 'joe', 5)
+parallel_1.schedule(hello, 'sam', 3)
+parallel_1.schedule(async_hello, 'bob', 1)
+```
+
+As you can see, `Parallel` lets you schedule any function, async or blocking.  The really nice part is that it
+allows you to run your parallel functions in either a blocking or async context:
+
+`results = await parallel_1.run()`
+
+or 
+
+`results = parallel_1.block()`
+
+In either case, the `results` will be a list of the return values from the scheduled functions, in the order they were
+scheduled.
+
+`Parallel` will only convert functions which are of the wrong type (sync for async and vice-versa) when you call the
+run/block functions.
+
+## Running multiple tasks serially
+Generally, if you want to run multiple tasks serially, I'd just run them, or run them with `a_sync.block`.  However,
+for reasons of symmetry and some convenience, a `Serial` class is provided, which mimics the schedule/run/block API of
+`Parallel`, but runs all the scheduled tasks serially.
+
+The drawback to using this method is that you have to wait for the results, and you cannot pass them around.  The benefits are:
+* you can ignore function type (sync/async)
+* you can run blocking or async
 
 # API
 
