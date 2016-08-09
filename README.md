@@ -64,3 +64,242 @@ for dealing with blocking calls.
 Further musings given the stretch goals - this assumes you want python for other reasons than concurrency.  there are 
 other languages which are explicitly designed for concurrency from the start, and usually features designed into the
 lanugage are easier to work with than libraries built on top are.
+
+
+# API
+
+## Functions
+### `idle_event_loop() -> Generator`
+
+An idle event loop context manager.
+
+Leaves the current event loop in place if it's not running.
+Creates and sets a new event loop as the default if the current default IS running.
+Restores the original event loop on exit.
+
+**Args:**
+* None
+
+**Returns:**
+* idle_event_loop_manager - a context manager which yields an idle event loop
+    for you to run async functions in.
+
+
+### `to_async(blocking_func: AnyCallable) -> AnyCallable`
+    
+Convert a blocking function to an async function.
+
+If the argument is already a coroutine function, it is returned unchanged.
+
+If the argument is a partial which wraps a coroutine function, it is returned
+unchanged.
+
+The blocking function is made into an awaitable by wrapping its call inside
+an awaitable function.
+
+On the assumption that a blocking function is long-running, and that an
+async caller wants to run other things concurrently, the blocking function
+is called from the running loop's thread/process executor, which means
+it runs in a thread.  This allows concurrent running, but introduces possible
+thread-safety issues, which the caller should be aware of.
+
+**Args:**
+* blocking_func - a blocking function
+
+**Returns:**
+* async_func - an awaitable function
+
+
+### `to_blocking(async_func: AnyCallable) -> AnyCallable`
+
+Convert an async function to a blocking function.
+
+If the argument is already a blocking function, it is returned unchanged.
+
+If the argument is a partial for an awaitable, it is converted.
+
+The awaitable function is made blocking by wrapping its call in a blocking
+function, which gets/creates an idle asyncio event loop and runs the
+awaitable in it until it is complete.
+
+**Args:**
+* async_func - an async function
+
+**Returns:**
+* blocking_func - a blocking function
+
+
+
+### `async queue_background_thread` *not provided*
+
+No async background task here because that depends on knowing the environment
+of the caller, as far as async context goes, and you can't.  For example,
+if the caller is being executed via the curio kernel, and we add a task to the
+current asyncio event loop, that task will never complete.
+
+
+### `queue_background_thread(func: Callable, *args, **kwargs) -> futures.Future`
+    
+Queue the function to be run in a thread, but don't wait for it.
+
+If the thread pool executor is processing on all threads, it will queue this
+task.  There's currently no way to check it or expand it's pool, hence the
+name of the function and the summary have been updated to reflect that..
+
+**Args:**
+* func - the function to run
+* `*args` - the args to call the function with
+* `**kwargs` - the kwargs to call the function with
+
+**Returns:**
+* future - a concurrent.futures Future for the function.
+
+
+
+### `async run(func: AnyCallable, *args, **kwargs) -> Any`
+Run a function in an async manner, whether the function is async or blocking.
+
+**Args:**
+* func - the function (async or blocking) to run
+* `*args` - the args to run the function with
+* `**kwargs` - the kwargs to run the function with
+
+**Returns:**
+* coro - a coroutine object to await
+
+**Coro Returns:**
+* result - whatever the function returns when it's done.
+
+
+### `block(func: AnyCallable, *args, **kwargs) -> Any`
+
+Run a function in a blocking manner, whether the function is async or blocking.
+
+Args:
+* func - the function (async or blocking) to run
+* `*args` - the args to run the function with
+* `**kwargs` - the kwargs to run the function with
+
+**Returns:**
+* result - whatever the function returns when it's done.
+
+
+## Parallel Class
+### `class Parallel`
+
+Parallel runner.
+
+Provides a way to:
+    * schedule a heterogeneous mix of blocking and awaitable functions
+    * run those functions all in parallel
+    * to run them in either a blocking or an asynchronous manner
+    * to receive the results in the order in which the functions were passed in.
+    * to run them as many times as desired (similarly to a partial function)
+
+It's analogous to a partial function, but instead of supplying args for a function and getting
+a function back, you supply args for as many functions as you like, and get an function back with which
+you can run those functions and arguments in parallel, either synchronously or asynchronously.
+
+**Args:**
+* None
+
+
+### `schedule(self, func, *args, **kwargs) -> 'Parallel'`
+Schedule a function to be run.
+
+**Args:**
+* func - the function to schedule
+* `*args` - the args to call the function with
+* `**kwargs` - the kwargs to call the function with
+
+**Returns:**
+* parallel - the parallel object, to allow chaining.
+
+
+### `async run(self) -> List[Any]`
+Run the scheduled functions in parallel, asynchronously.
+
+**Args:**
+* None
+
+**Returns:**
+* list - a list of the results from the scheduled functions, in the
+    order they were scheduled in.
+
+Note that while this function is awaitable, the scheduled functions are
+run in an asyncio loop in a separate thread.  We cannot create asyncio
+tasks and run them in the current thread because that depends on knowing the environment
+of the caller, as far as async context goes, and you can't.  For example,
+if the caller is being executed via the curio kernel, and we add a task to the
+current asyncio event loop, that task will never complete.
+
+Our only alternative is to run in an independent loop that we control.  The
+only way to actually make that concurrent instead of blocking in this function
+is to run that loop in its own thread.
+
+
+### `block(self) -> List[Any]`
+Run the scheduled functions in parallel, blocking.
+
+**Args:**
+* None
+
+**Returns:**
+* list - a list of the results from the scheduled functions, in the
+    order they were scheduled in.
+
+
+## Serial Class
+### `class Serial`
+Serial runner.
+
+Provides a way to:
+    * schedule a heterogeneous mix of blocking and awaitable functions
+    * run those functions all in series
+    * to run them in either a blocking or an asynchronous manner
+    * to receive the results in the order in which the functions were passed in.
+    * to run them as many times as desired (similarly to a partial function)
+
+It's analogous to a partial function, but instead of supplying args for a function and getting
+a function back, you supply args for as many functions as you like, and get an function back with which
+you can run those functions and arguments in series, either synchronously or asynchronously.
+
+**Args:**
+* None
+
+
+### `schedule(self, func: Callable, *args, **kwargs) -> 'Serial'`
+
+Schedule a function to be run.
+
+**Args:**
+* func - the function to schedule
+* `*args` - the args to call the function with
+* `**kwargs` - the kwargs to call the function with
+
+**Returns:**
+* series - the series object, to allow chaining.
+
+
+### `async run(self) -> List[Any]`
+
+Run the scheduled functions in series, asynchronously.
+
+**Args:**
+    None
+
+**Returns:**
+* list - a list of the results from the scheduled functions, in the
+    order they were scheduled in.
+
+
+### `block(self) -> List[Any]`
+
+Run the scheduled functions in series, blocking.
+
+**Args:**
+* None
+
+**Returns:**
+* list - a list of the results from the scheduled functions, in the
+    order they were scheduled in.
