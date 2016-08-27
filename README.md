@@ -19,6 +19,7 @@ This library provides simple functions for:
 * running multiple functions in series, either asynchronously or in a blocking fashion
 * getting/creating and setting/reverting an independent asyncio event loop to use, regardless of thread or thread-global
 asyncio loop run status.
+* async input
 
 # Under construction
 The repo is "under construction" - it serves at the moment as a place to put the project and "get it out there", but there are a lot of project-management tasks to do, including getting a sensible README up.
@@ -272,6 +273,17 @@ some object state)
 # API
 
 ## Functions
+### `async a_input(prompt: str) -> str`
+
+An async input function.  Basic functionality is the same as the standard `input`, though it's not affected by the
+readline library.
+
+**Args:**
+* prompt - the prompt to print before waiting for input.
+
+**Returns:**
+* user_input - the user input.
+
 ### `idle_event_loop() -> Generator`
 
 An idle event loop context manager.

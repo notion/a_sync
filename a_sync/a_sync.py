@@ -8,6 +8,10 @@ import functools
 import contextlib
 from typing import Generator, Callable, Any, List, Union
 from concurrent import futures
+import sys
+import concurrent.futures
+import select
+import termios
 # [ -Project ]
 from . import helpers
 
@@ -218,6 +222,22 @@ def block(func: AnyCallable, *args, **kwargs) -> Any:
         * run a blocking func
     """
     return to_blocking(func)(*args, **kwargs)
+
+
+async def a_input(prompt: str) -> str:
+    """Async input prompt."""
+    readable = []  # type: List[int]
+    print(prompt, end='')
+    sys.stdout.flush()
+    while not readable:
+        readable, writeable, executable = select.select([sys.stdin], [], [], 0)
+        try:
+            await asyncio.sleep(0.1)
+        except concurrent.futures.CancelledError:
+            print("input cancelled...")
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+            raise
+    return sys.stdin.readline().rstrip()
 
 
 # [ Classes ]
