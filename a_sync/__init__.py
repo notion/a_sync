@@ -9,6 +9,7 @@ from a_sync.a_sync import (
     queue_background_thread,
     run,
     block,
+    a_input,
     Parallel,
     Serial
 )
@@ -21,5 +22,6 @@ assert to_blocking
 assert queue_background_thread
 assert run
 assert block
+assert a_input
 assert Parallel
 assert Serial
