@@ -80,7 +80,8 @@ def set_executor(executor: futures.ThreadPoolExecutor) -> None:
     Returns:
         None
     """
-    global EXECUTOR
+    # I know this is bad - all this code is going away soon during the module rewrite, though.
+    global EXECUTOR  # pylint: disable=global-statement
     EXECUTOR = executor
 
 

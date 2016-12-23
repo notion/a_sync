@@ -9,7 +9,6 @@ import contextlib
 from typing import Generator, Callable, Any, List, Union
 from concurrent import futures
 import sys
-import concurrent.futures
 import select
 import termios
 # [ -Project ]
@@ -18,7 +17,8 @@ from . import helpers
 
 # [ Types ]
 # convert AnyCallable to just Callable when https://github.com/python/mypy/issues/1484 is resolved
-AnyCallable = Union[Callable, functools.partial]
+# this is a type definition, which pylint doesn't recoginize
+AnyCallable = Union[Callable, functools.partial]  # pylint: disable=invalid-name
 
 
 # [ API Functions ]
@@ -104,8 +104,10 @@ def to_async(blocking_func: AnyCallable) -> AnyCallable:
             partial = functools.partial(blocking_func, *args, **kwargs)  # type: ignore
             loop = asyncio.get_event_loop()
             # lambda is to get around AbstractEventLoop typing not accepting partials
-            # remove lambda when https://github.com/python/mypy/issues/1484 is resolved
-            return await loop.run_in_executor(helpers.get_or_create_executor(), lambda: partial())
+            # remove lambda & pylint disable when https://github.com/python/mypy/issues/1484 is resolved
+            return await loop.run_in_executor(
+                helpers.get_or_create_executor(), lambda: partial()  # pylint: disable=unnecessary-lambda
+            )
     return async_func
 
 
@@ -180,7 +182,8 @@ def queue_background_thread(func: Callable, *args, **kwargs) -> futures.Future:
         * queue a task
         * queue enough tasks to fill the queue & more.
     """
-    return helpers.get_or_create_executor().submit(to_blocking(func), *args, **kwargs)
+    # remove the type-ignore statement as part of https://github.com/notion/a_sync/issues/34
+    return helpers.get_or_create_executor().submit(to_blocking(func), *args, **kwargs)  # type: ignore
 
 
 async def run(func: AnyCallable, *args, **kwargs) -> Any:
@@ -230,10 +233,10 @@ async def a_input(prompt: str) -> str:
     print(prompt, end='')
     sys.stdout.flush()
     while not readable:
-        readable, writeable, executable = select.select([sys.stdin], [], [], 0)
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
         try:
             await asyncio.sleep(0.1)
-        except concurrent.futures.CancelledError:
+        except futures.CancelledError:
             print("input cancelled...")
             termios.tcflush(sys.stdin, termios.TCIFLUSH)
             raise
