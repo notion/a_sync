@@ -2,7 +2,7 @@
 
 
 # [ Imports ]
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 
 # [ Setup ]
@@ -35,4 +35,14 @@ setup(
     keywords="async await asynchronous library parallel background",
     packages=find_packages(),
     install_requires=[],
+    extras_require={
+        'checkers': [
+            'pocketwalk',
+            'dodgy',
+            'flake8-bugbear', 'flake8-docstrings', 'flake8-import-order',
+            'mypy-lang', 'typed-ast',
+            'pylint',
+            'vulture',
+        ]
+    }
 )

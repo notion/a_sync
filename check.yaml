@@ -6,3 +6,4 @@ checks:
     - [pylint, '{changed}']
     - [flake8, '{changed}']
     - [mypy, -s, --fast-parser, --disallow-untyped-defs]
+    - [dodgy]
