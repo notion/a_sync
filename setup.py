@@ -8,9 +8,8 @@ from setuptools import setup, find_packages
 # [ Setup ]
 setup(
     name='a_sync',
-    version='0.4.0',
+    version='0.4.1',
     description='async helper library.',
-    long_description=open('LONG_DESCRIPTION.rst').read(),
     url='https://github.com/notion/a_sync',
     author='toejough',
     author_email='toejough@gmail.com',
