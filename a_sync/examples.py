@@ -9,8 +9,8 @@ import time
 import a_sync
 
 
-# [ Examples ]
-if __name__ == '__main__':  # pragma: no branch
+def examples() -> None:
+    """Run examples."""
     def hello(name: str, seconds: int) -> str:
         """
         Hello.
@@ -49,7 +49,7 @@ if __name__ == '__main__':  # pragma: no branch
         print('bye {}'.format(name))
         return name
 
-    bg = a_sync.queue_background_thread(hello, 'background-joe', 20)
+    background_thread = a_sync.queue_background_thread(hello, 'background-joe', 20)
     # expect background-joe immediately
 
     parallel_1 = a_sync.Parallel()
@@ -91,7 +91,7 @@ if __name__ == '__main__':  # pragma: no branch
     final_parallel.schedule(serial_2.run)
 
     final_parallel.block()
-    bg.result()
+    background_thread.result()
     # expect bob/sam/joe to start with jo/joey/joseph
     # expect jill/jane/mary to start with alex/alexandria/alexandra
     # total expected ordering:
@@ -104,3 +104,8 @@ if __name__ == '__main__':  # pragma: no branch
     # stop alexandria/jane
     # stop alex/jill
     # stop background-joe
+
+
+# [ Examples ]
+if __name__ == '__main__':  # pragma: no branch
+    examples()
