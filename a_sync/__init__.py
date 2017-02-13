@@ -3,15 +3,17 @@
 
 # [ Imports ]
 from a_sync.a_sync import (
+    ExitOption,
+    Parallel,
+    Serial,
+    ThreadExecutor,
+    a_input,
+    block,
     idle_event_loop,
-    to_async,
-    to_blocking,
     queue_background_thread,
     run,
-    block,
-    a_input,
-    Parallel,
-    Serial
+    to_async,
+    to_blocking,
 )
 
 
@@ -25,3 +27,5 @@ assert block
 assert a_input
 assert Parallel
 assert Serial
+assert ThreadExecutor
+assert ExitOption
