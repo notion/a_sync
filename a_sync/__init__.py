@@ -2,7 +2,7 @@
 
 
 # [ Imports ]
-from a_sync.a_sync import (
+from .a_sync import (
     ExitOption,
     Parallel,
     Serial,

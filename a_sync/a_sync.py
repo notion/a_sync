@@ -106,7 +106,7 @@ def to_async(blocking_func: AnyCallable) -> AnyCallable:
         # caller messed up - this is already async
         async_func = blocking_func
     else:
-        async def async_func(*args, **kwargs) -> Any:
+        async def async_func(*args: Any, **kwargs: Any) -> Any:
             """Wrapper for a blocking function."""
             # remove ignore comment when https://github.com/python/mypy/issues/1484 is resolved
             partial = functools.partial(blocking_func, *args, **kwargs)  # type: ignore
@@ -150,7 +150,7 @@ def to_blocking(async_func: AnyCallable) -> AnyCallable:
         # caller messed up - this is already blocking
         blocking = async_func
     else:
-        def blocking(*args, **kwargs) -> Any:
+        def blocking(*args: Any, **kwargs: Any) -> Any:
             """Wrapper for an async function."""
             with idle_event_loop() as loop:
                 return loop.run_until_complete(async_func(*args, **kwargs))
@@ -163,7 +163,7 @@ def to_blocking(async_func: AnyCallable) -> AnyCallable:
 # current asyncio event loop, that task will never complete.
 
 
-def queue_background_thread(func: Callable, *args, **kwargs) -> futures.Future:
+def queue_background_thread(func: Callable, *args: Any, **kwargs: Any) -> futures.Future:
     """
     Queue the function to be run in a thread, but don't wait for it.
 
@@ -194,7 +194,7 @@ def queue_background_thread(func: Callable, *args, **kwargs) -> futures.Future:
     return helpers.get_or_create_executor().submit(to_blocking(func), *args, **kwargs)  # type: ignore
 
 
-async def run(func: AnyCallable, *args, **kwargs) -> Any:
+async def run(func: AnyCallable, *args: Any, **kwargs: Any) -> Any:
     """
     Run a function in an async manner, whether the function is async or blocking.
 
@@ -216,7 +216,7 @@ async def run(func: AnyCallable, *args, **kwargs) -> Any:
     return await to_async(func)(*args, **kwargs)
 
 
-def block(func: AnyCallable, *args, **kwargs) -> Any:
+def block(func: AnyCallable, *args: Any, **kwargs: Any) -> Any:
     """
     Run a function in a blocking manner, whether the function is async or blocking.
 
@@ -285,7 +285,7 @@ class Parallel:
         """
         self._funcs = []  # type: List[functools.partial]
 
-    def schedule(self, func, *args, **kwargs) -> 'Parallel':
+    def schedule(self, func: Callable, *args: Any, **kwargs: Any) -> 'Parallel':
         """
         Schedule a function to be run.
 
@@ -393,7 +393,7 @@ class Serial:
         """
         self._funcs = []  # type: List[functools.partial]
 
-    def schedule(self, func: Callable, *args, **kwargs) -> 'Serial':
+    def schedule(self, func: Callable, *args: Any, **kwargs: Any) -> 'Serial':
         """
         Schedule a function to be run.
 
@@ -573,9 +573,9 @@ def test_tf_multiple_abandon() -> None:
 class ExitOption(enum.Enum):
     """Exit option."""
 
-    ABANDON = enum.auto()  # type: ignore
-    NO_WAIT = enum.auto()  # type: ignore
-    WAIT = enum.auto()  # type: ignore
+    ABANDON = 1
+    NO_WAIT = 2
+    WAIT = 3
 
 
 class ThreadExecutor(futures.Executor):
@@ -661,7 +661,7 @@ class ThreadExecutor(futures.Executor):
             ExitOption.WAIT: functools.partial(self.shutdown, wait=True),
         }[on_exit]
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type: type, exc_val: Exception, exc_tb: Any) -> bool:
         """
         Exit the context manager.
 
@@ -740,7 +740,7 @@ class ThreadExecutor(futures.Executor):
                 self._monitor_thread = threading.Thread(target=self._monitor, daemon=False)
                 self._monitor_thread.start()
 
-    def submit(self, fn: Callable, *args, **kwargs) -> ThreadFuture:
+    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> ThreadFuture:
         """
         Submit a function to be run in a new thread.
 
@@ -766,7 +766,7 @@ class ThreadExecutor(futures.Executor):
         with self._monitored_thread_lock:
             this_future = ThreadFuture()  # type: ThreadFuture
 
-            def wrapped_fn(*args, **kwargs) -> None:
+            def wrapped_fn(*args: Any, **kwargs: Any) -> None:
                 """
                 A wrapped version of the fn.
 

@@ -87,7 +87,7 @@ def abandon_example() -> None:
 def context_manager_example() -> None:
     """Example of a context manager."""
     try:
-        with a_sync.ThreadExecutor(on_exit=a_sync.ExitOption.WAIT) as executor:  # type: ignore
+        with a_sync.ThreadExecutor(on_exit=a_sync.ExitOption.WAIT) as executor:
             list(executor.map(rest, [1, 1, 2, 3, 5, 7, 13, 4, 6, 8, 9, 10, 11, 12], timeout=5))
     except futures.TimeoutError:
         print("timed out")

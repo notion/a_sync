@@ -30,17 +30,17 @@ setup(
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.5',
     ],
     keywords="async await asynchronous library parallel background",
     packages=find_packages(),
-    install_requires=[],
+    install_requires=['utaw'],
     extras_require={
         'checkers': [
             'pocketwalk',
             'dodgy',
             'flake8-bugbear', 'flake8-docstrings', 'flake8-import-order',
-            'mypy-lang', 'typed-ast',
+            'mypy',
             'pylint',
             'vulture',
         ]
