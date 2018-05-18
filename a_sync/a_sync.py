@@ -146,7 +146,7 @@ def to_blocking(async_func: AnyCallable) -> AnyCallable:
         * keep blocking partial the same
         * convert async partial
     """
-    if not asyncio.iscoroutinefunction(async_func) or asyncio.iscoroutinefunction(getattr(async_func, 'func', None)):
+    if not (asyncio.iscoroutinefunction(async_func) or asyncio.iscoroutinefunction(getattr(async_func, 'func', None))):
         # caller messed up - this is already blocking
         blocking = async_func
     else:
